@@ -42,6 +42,7 @@ const io = new Server(server, {
 const transactionOptions = { timeout: 15000, maxWait: 15000 };
 
 type AuthUser = Pick<User, "id" | "name" | "email" | "role" | "active">;
+type TokenPayload = { sub: string; role: UserRole; email: string; name: string };
 
 declare global {
   namespace Express {
@@ -78,6 +79,31 @@ const pendingOrders = new Map<
     queuedStatus?: { status: OrderStatus; actorId?: string; note?: string };
   }
 >();
+
+let setupCache:
+  | {
+      expiresAt: number;
+      tables: any[];
+      categories: any[];
+      availableItems: any[];
+      allItems: any[];
+      users: any[];
+    }
+  | undefined;
+let activeOrdersCache: { expiresAt: number; orders: any[] } | undefined;
+let summaryCache: { expiresAt: number; summary: any } | undefined;
+
+function clearSetupCache() {
+  setupCache = undefined;
+}
+
+function clearOrdersCache() {
+  activeOrdersCache = undefined;
+}
+
+function clearSummaryCache() {
+  summaryCache = undefined;
+}
 
 prisma.$connect().catch((error) => {
   console.error("Database connection failed", error);
@@ -191,18 +217,14 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const payload = jwt.verify(token, jwtSecret) as { sub: string };
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, name: true, email: true, role: true, active: true },
-    });
-
-    if (!user?.active) {
-      res.status(401).json({ message: "User is inactive or missing" });
-      return;
-    }
-
-    req.user = user;
+    const payload = jwt.verify(token, jwtSecret) as TokenPayload;
+    req.user = {
+      id: payload.sub,
+      name: payload.name,
+      email: payload.email,
+      role: payload.role,
+      active: true,
+    };
     next();
   } catch {
     res.status(401).json({ message: "Invalid or expired token" });
@@ -225,8 +247,6 @@ async function orderInclude() {
     table: true,
     waiter: { select: { id: true, name: true, email: true, role: true } },
     items: { orderBy: { id: "asc" as const } },
-    payments: true,
-    statusEvents: { orderBy: { createdAt: "asc" as const } },
   };
 }
 
@@ -254,6 +274,91 @@ async function refreshTableStatus(tableId: string) {
   io.emit("table:status_changed", table);
 }
 
+async function summaryReport() {
+  if (summaryCache && summaryCache.expiresAt > Date.now()) return summaryCache.summary;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const [paidOrders, activeOrders, payments, topItems] = await Promise.all([
+    prisma.order.count({ where: { status: "PAID", updatedAt: { gte: today } } }),
+    prisma.order.count({ where: { status: { in: activeStatuses } } }),
+    prisma.payment.findMany({ where: { status: "PAID", createdAt: { gte: today } } }),
+    prisma.orderItem.groupBy({
+      by: ["menuItemName"],
+      _sum: { quantity: true, lineTotal: true },
+      orderBy: { _sum: { quantity: "desc" } },
+      take: 5,
+    }),
+  ]);
+
+  const summary = {
+    paidOrders,
+    activeOrders,
+    todayRevenue: payments.reduce((sum, payment) => sum + money(payment.amount), 0),
+    topItems: topItems.map((item) => ({
+      name: item.menuItemName,
+      quantity: item._sum.quantity ?? 0,
+      revenue: money(item._sum.lineTotal ?? 0),
+    })),
+  };
+  summaryCache = { expiresAt: Date.now() + 10_000, summary };
+  return summary;
+}
+
+async function setupData() {
+  if (setupCache && setupCache.expiresAt > Date.now()) return setupCache;
+
+  const [tables, categories, availableItems, allItems, users] = await Promise.all([
+    prisma.diningTable.findMany({ orderBy: { tableNumber: "asc" } }),
+    prisma.menuCategory.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
+    prisma.menuItem.findMany({
+      where: { available: true },
+      include: { category: true },
+      orderBy: [{ category: { sortOrder: "asc" } }, { name: "asc" }],
+    }),
+    prisma.menuItem.findMany({
+      include: { category: true },
+      orderBy: [{ category: { sortOrder: "asc" } }, { name: "asc" }],
+    }),
+    prisma.user.findMany({
+      select: { id: true, name: true, email: true, role: true, active: true },
+      orderBy: [{ role: "asc" }, { name: "asc" }],
+    }),
+  ]);
+
+  setupCache = {
+    expiresAt: Date.now() + 60_000,
+    tables,
+    categories,
+    availableItems: availableItems.map((item) => ({ ...item, price: money(item.price) })),
+    allItems: allItems.map((item) => ({ ...item, price: money(item.price) })),
+    users,
+  };
+  return setupCache;
+}
+
+async function activeOrders() {
+  if (activeOrdersCache && activeOrdersCache.expiresAt > Date.now()) return activeOrdersCache.orders;
+  const orders = await prisma.order.findMany({
+    where: { status: { in: activeStatuses } },
+    include: await orderInclude(),
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  activeOrdersCache = { expiresAt: Date.now() + 3_000, orders: orders.map(serializeOrder) };
+  return activeOrdersCache.orders;
+}
+
+function warmCaches() {
+  Promise.all([setupData(), summaryReport(), activeOrders()]).catch((error) => {
+    console.error("Cache warm failed", error);
+  });
+}
+
+setTimeout(warmCaches, 1_000).unref();
+setInterval(warmCaches, 55_000).unref();
+
 async function changeOrderStatus(orderId: string, toStatus: OrderStatus, actorId?: string, note?: string) {
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order) {
@@ -273,6 +378,8 @@ async function changeOrderStatus(orderId: string, toStatus: OrderStatus, actorId
     io.to("cashier").emit("order:status_changed", pending.payload);
     io.to("managers").emit("order:status_changed", pending.payload);
     io.to(`waiter:${pending.waiterId}`).emit("order:status_changed", pending.payload);
+    clearOrdersCache();
+    clearSummaryCache();
     if (toStatus === "READY") notifyWaiterReady(pending.payload);
     return pending.payload;
   }
@@ -312,6 +419,8 @@ async function changeOrderStatus(orderId: string, toStatus: OrderStatus, actorId
   if (["SERVED", "PAID", "CANCELLED"].includes(toStatus)) {
     await refreshTableStatus(order.tableId);
   }
+  clearOrdersCache();
+  clearSummaryCache();
   await emitOrder(orderId);
   if (toStatus === "READY") notifyWaiterReady(serializeOrder(updated));
   return updated;
@@ -328,6 +437,41 @@ app.get(
   (_req, res) => {
     res.json({ baseUrl: ntfyBaseUrl, topics: ntfyTopics });
   },
+);
+
+app.get(
+  "/bootstrap/waiter",
+  authenticate,
+  authorize("WAITER", "ADMIN", "MANAGER"),
+  asyncHandler(async (req, res) => {
+    const [setup, orders] = await Promise.all([setupData(), activeOrders()]);
+    const visibleOrders = req.user?.role === "WAITER" ? orders.filter((order) => order.waiterId === req.user?.id) : orders;
+
+    res.json({
+      tables: setup.tables,
+      categories: setup.categories,
+      items: setup.availableItems,
+      orders: visibleOrders,
+    });
+  }),
+);
+
+app.get(
+  "/bootstrap/admin",
+  authenticate,
+  authorize("ADMIN", "MANAGER"),
+  asyncHandler(async (_req, res) => {
+    const [summary, setup] = await Promise.all([summaryReport(), setupData()]);
+
+    res.json({
+      summary,
+      notifications: { baseUrl: ntfyBaseUrl, topics: ntfyTopics },
+      users: setup.users,
+      tables: setup.tables,
+      categories: setup.categories,
+      items: setup.allItems,
+    });
+  }),
 );
 
 app.post(
@@ -443,6 +587,7 @@ app.post(
       select: { id: true, name: true, email: true, role: true, active: true },
     });
 
+    clearSetupCache();
     res.status(201).json({ user });
   }),
 );
@@ -463,6 +608,7 @@ app.post(
   asyncHandler(async (req, res) => {
     const body = z.object({ tableNumber: z.string().min(1), seats: z.number().int().min(1).default(4) }).parse(req.body);
     const table = await prisma.diningTable.create({ data: body });
+    clearSetupCache();
     res.status(201).json({ table });
   }),
 );
@@ -497,6 +643,7 @@ app.put(
     }, transactionOptions);
 
     const tables = await prisma.diningTable.findMany({ orderBy: { tableNumber: "asc" } });
+    clearSetupCache();
     io.emit("table:status_changed", { setup: true, tables });
     res.json({ tables });
   }),
@@ -518,6 +665,7 @@ app.post(
   asyncHandler(async (req, res) => {
     const body = z.object({ name: z.string().min(1), sortOrder: z.number().int().default(0) }).parse(req.body);
     const category = await prisma.menuCategory.create({ data: body });
+    clearSetupCache();
     res.status(201).json({ category });
   }),
 );
@@ -550,6 +698,7 @@ app.post(
       })
       .parse(req.body);
     const item = await prisma.menuItem.create({ data: { ...body, price: body.price.toFixed(2) }, include: { category: true } });
+    clearSetupCache();
     io.emit("menu:item_availability_changed", { id: item.id, available: item.available });
     res.status(201).json({ item: { ...item, price: money(item.price) } });
   }),
@@ -575,6 +724,7 @@ app.patch(
       data: { ...body, price: body.price?.toFixed(2) },
       include: { category: true },
     });
+    clearSetupCache();
     io.emit("menu:item_availability_changed", { id: item.id, available: item.available });
     res.json({ item: { ...item, price: money(item.price) } });
   }),
@@ -661,6 +811,8 @@ app.post(
       io.to(`waiter:${req.user!.id}`).emit("order:created", payload);
       io.emit("table:status_changed", { id: body.tableId, status: "OCCUPIED" });
       notifyKitchenOrder(payload);
+      clearOrdersCache();
+      clearSummaryCache();
       res.status(201).json({ order: payload });
 
       prisma
@@ -706,6 +858,8 @@ app.post(
         }, transactionOptions)
         .then(async () => {
           pendingOrders.delete(orderId);
+          clearOrdersCache();
+          clearSummaryCache();
           await emitOrder(orderId);
         })
         .catch((error) => {
@@ -785,6 +939,8 @@ app.post(
     io.to(`waiter:${order.waiterId}`).emit("order:created", payload);
     io.emit("table:status_changed", { id: body.tableId, status: "OCCUPIED" });
     notifyKitchenOrder(payload);
+    clearOrdersCache();
+    clearSummaryCache();
     res.status(201).json({ order: payload });
   }),
 );
@@ -796,6 +952,7 @@ app.get(
     const status = typeof req.query.status === "string" ? (req.query.status as OrderStatus) : undefined;
     const where: Prisma.OrderWhereInput = {};
     if (status) where.status = status;
+    else where.status = { in: activeStatuses };
     if (req.user?.role === "WAITER") where.waiterId = req.user.id;
 
     const orders = await prisma.order.findMany({
@@ -889,6 +1046,8 @@ app.post(
     }, transactionOptions);
 
     await refreshTableStatus(order.tableId);
+    clearOrdersCache();
+    clearSummaryCache();
     await emitOrder(body.orderId, "payment:completed");
     res.status(201).json({ payment: { ...payment, amount: money(payment.amount) } });
   }),
@@ -899,31 +1058,7 @@ app.get(
   authenticate,
   authorize("ADMIN", "MANAGER"),
   asyncHandler(async (_req, res) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const [paidOrders, activeOrders, payments, topItems] = await Promise.all([
-      prisma.order.count({ where: { status: "PAID", updatedAt: { gte: today } } }),
-      prisma.order.count({ where: { status: { in: activeStatuses } } }),
-      prisma.payment.findMany({ where: { status: "PAID", createdAt: { gte: today } } }),
-      prisma.orderItem.groupBy({
-        by: ["menuItemName"],
-        _sum: { quantity: true, lineTotal: true },
-        orderBy: { _sum: { quantity: "desc" } },
-        take: 5,
-      }),
-    ]);
-
-    res.json({
-      paidOrders,
-      activeOrders,
-      todayRevenue: payments.reduce((sum, payment) => sum + money(payment.amount), 0),
-      topItems: topItems.map((item) => ({
-        name: item.menuItemName,
-        quantity: item._sum.quantity ?? 0,
-        revenue: money(item._sum.lineTotal ?? 0),
-      })),
-    });
+    res.json(await summaryReport());
   }),
 );
 
@@ -931,13 +1066,14 @@ io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
     if (!token) throw new Error("Missing token");
-    const payload = jwt.verify(token, jwtSecret) as { sub: string };
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, name: true, email: true, role: true, active: true },
-    });
-    if (!user?.active) throw new Error("Inactive user");
-    socket.data.user = user;
+    const payload = jwt.verify(token, jwtSecret) as TokenPayload;
+    socket.data.user = {
+      id: payload.sub,
+      name: payload.name,
+      email: payload.email,
+      role: payload.role,
+      active: true,
+    };
     next();
   } catch {
     next(new Error("Socket authentication failed"));

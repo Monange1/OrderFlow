@@ -460,17 +460,12 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
   }, [items, categoryId, search]);
 
   async function load() {
-    const [tableData, categoryData, itemData, orderData] = await Promise.all([
-      apiFetch<{ tables: Table[] }>("/tables", token),
-      apiFetch<{ categories: Category[] }>("/menu/categories", token),
-      apiFetch<{ items: MenuItem[] }>("/menu/items?available=true", token),
-      apiFetch<{ orders: Order[] }>("/orders", token),
-    ]);
-    setTables(tableData.tables);
-    setCategories(categoryData.categories);
-    setItems(itemData.items);
-    setOrders(sortNewest(orderData.orders));
-    setSelectedTableId((current) => current || tableData.tables[0]?.id || "");
+    const data = await apiFetch<{ tables: Table[]; categories: Category[]; items: MenuItem[]; orders: Order[] }>("/bootstrap/waiter", token);
+    setTables(data.tables);
+    setCategories(data.categories);
+    setItems(data.items);
+    setOrders(sortNewest(data.orders));
+    setSelectedTableId((current) => current || data.tables[0]?.id || "");
     setLoading(false);
   }
 
@@ -922,22 +917,22 @@ function AdminSetup({ token, notify }: { token: string; notify: (value: string, 
   const [itemCategoryId, setItemCategoryId] = useState("");
 
   async function load() {
-    const [summaryData, notificationData, userData, tableData, categoryData, itemData] = await Promise.all([
-      apiFetch<Summary>("/reports/summary", token),
-      apiFetch<NotificationTopics>("/notifications/topics", token),
-      apiFetch<{ users: User[] }>("/users", token),
-      apiFetch<{ tables: Table[] }>("/tables", token),
-      apiFetch<{ categories: Category[] }>("/menu/categories", token),
-      apiFetch<{ items: MenuItem[] }>("/menu/items", token),
-    ]);
-    setSummary(summaryData);
-    setNotificationTopics(notificationData);
-    setUsers(userData.users);
-    setTables(tableData.tables);
-    setTableCount(String(tableData.tables.length || ""));
-    setCategories(categoryData.categories);
-    setItems(itemData.items);
-    setItemCategoryId(categoryData.categories[0]?.id ?? "");
+    const data = await apiFetch<{
+      summary: Summary;
+      notifications: NotificationTopics;
+      users: User[];
+      tables: Table[];
+      categories: Category[];
+      items: MenuItem[];
+    }>("/bootstrap/admin", token);
+    setSummary(data.summary);
+    setNotificationTopics(data.notifications);
+    setUsers(data.users);
+    setTables(data.tables);
+    setTableCount(String(data.tables.length || ""));
+    setCategories(data.categories);
+    setItems(data.items);
+    setItemCategoryId(data.categories[0]?.id ?? "");
     setLoading(false);
   }
 
