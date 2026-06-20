@@ -66,6 +66,7 @@ type Summary = {
   topItems: Array<{ name: string; quantity: number; revenue: number }>;
 };
 type NotificationTopics = {
+  enabled: boolean;
   baseUrl: string;
   topics: { kitchen: string; waiter: string; cashier: string };
 };
@@ -905,6 +906,7 @@ function AdminSetup({ token, notify }: { token: string; notify: (value: string, 
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState("");
+  const [testingPush, setTestingPush] = useState("");
   const [staffName, setStaffName] = useState("");
   const [staffRole, setStaffRole] = useState<Role>("WAITER");
   const [staffPassword, setStaffPassword] = useState("");
@@ -1051,6 +1053,26 @@ function AdminSetup({ token, notify }: { token: string; notify: (value: string, 
     setItems((current) => current.map((row) => (row.id === item.id ? data.item : row)));
   }
 
+  async function testPush(target: "kitchen" | "waiter" | "cashier") {
+    setTestingPush(target);
+    try {
+      await apiFetch(`/notifications/test`, token, {
+        method: "POST",
+        body: JSON.stringify({ target }),
+      });
+      notify(`Test push sent to ${target}`, false);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Push test failed");
+    } finally {
+      setTestingPush("");
+    }
+  }
+
+  function topicUrl(topic?: string) {
+    if (!notificationTopics || !topic) return "#";
+    return `${notificationTopics.baseUrl.replace(/\/$/, "")}/${encodeURIComponent(topic)}`;
+  }
+
   return (
     <section>
       <ScreenHeader eyebrow="Admin" title="Restaurant setup" subtitle="Everything the floor uses starts here." />
@@ -1061,12 +1083,20 @@ function AdminSetup({ token, notify }: { token: string; notify: (value: string, 
         <Metric label="Active orders" value={summary?.activeOrders ?? 0} />
         <article className="notification-card">
           <div className="section-title"><Volume2 /><h2>Phone push</h2></div>
-          <p>Subscribe staff phones in ntfy to receive kitchen and ready alerts.</p>
+          <p>Subscribe staff phones in ntfy, then send a test push before service starts.</p>
           <div className="topic-list">
             <span>Kitchen</span>
             <b>{notificationTopics?.topics.kitchen ?? "Loading"}</b>
+            <a href={topicUrl(notificationTopics?.topics.kitchen)} target="_blank" rel="noreferrer">Open</a>
+            <button onClick={() => testPush("kitchen")} disabled={testingPush === "kitchen"}>
+              {testingPush === "kitchen" ? "Sending" : "Test"}
+            </button>
             <span>Waiter</span>
             <b>{notificationTopics?.topics.waiter ?? "Loading"}</b>
+            <a href={topicUrl(notificationTopics?.topics.waiter)} target="_blank" rel="noreferrer">Open</a>
+            <button onClick={() => testPush("waiter")} disabled={testingPush === "waiter"}>
+              {testingPush === "waiter" ? "Sending" : "Test"}
+            </button>
           </div>
         </article>
       </div>

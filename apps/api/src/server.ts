@@ -31,6 +31,7 @@ const ntfyTopics = {
   waiter: process.env.NTFY_TOPIC_WAITER ?? process.env.NTFY_TOPIC ?? `orderflow-${ntfyTopicSeed}-waiter`,
   cashier: process.env.NTFY_TOPIC_CASHIER ?? process.env.NTFY_TOPIC ?? `orderflow-${ntfyTopicSeed}-cashier`,
 };
+const ntfyEnabled = process.env.NTFY_ENABLED !== "false";
 
 const io = new Server(server, {
   cors: {
@@ -119,24 +120,42 @@ function orderLineSummary(order: any) {
   return order.items?.map((item: any) => `${item.quantity}x ${item.menuItemName}`).join(", ") ?? "Order items";
 }
 
-function publishNtfy(topic: string, title: string, message: string, tags: string, priority = "high") {
-  if (!topic) return;
-  fetch(`${ntfyBaseUrl}/${encodeURIComponent(topic)}`, {
-    method: "POST",
-    body: message,
-    headers: {
-      Title: title,
-      Priority: priority,
-      Tags: tags,
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-  }).catch((error) => {
-    console.error("ntfy publish failed", error);
-  });
+async function publishNtfy(topic: string, title: string, message: string, tags: string, priority = "urgent") {
+  if (!ntfyEnabled) return { ok: false, skipped: true, message: "ntfy is disabled" };
+  if (!topic) return { ok: false, skipped: true, message: "Missing ntfy topic" };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+
+  try {
+    const response = await fetch(`${ntfyBaseUrl}/${encodeURIComponent(topic)}`, {
+      method: "POST",
+      signal: controller.signal,
+      body: message,
+      headers: {
+        Title: title,
+        Priority: priority,
+        Tags: tags,
+        "Content-Type": "text/plain; charset=utf-8",
+      },
+    });
+    const text = await response.text().catch(() => "");
+    if (!response.ok) {
+      console.error("ntfy publish failed", { status: response.status, topic, text });
+      return { ok: false, status: response.status, message: text || response.statusText };
+    }
+    return { ok: true, status: response.status, topic };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown ntfy error";
+    console.error("ntfy publish failed", { topic, message });
+    return { ok: false, message };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function notifyKitchenOrder(order: any) {
-  publishNtfy(
+  void publishNtfy(
     ntfyTopics.kitchen,
     `New order: table ${order.table?.tableNumber ?? "?"}`,
     orderLineSummary(order),
@@ -146,7 +165,7 @@ function notifyKitchenOrder(order: any) {
 }
 
 function notifyWaiterReady(order: any) {
-  publishNtfy(
+  void publishNtfy(
     ntfyTopics.waiter,
     `Ready: table ${order.table?.tableNumber ?? "?"}`,
     orderLineSummary(order),
@@ -435,8 +454,36 @@ app.get(
   authenticate,
   authorize("ADMIN", "MANAGER"),
   (_req, res) => {
-    res.json({ baseUrl: ntfyBaseUrl, topics: ntfyTopics });
+    res.json({ enabled: ntfyEnabled, baseUrl: ntfyBaseUrl, topics: ntfyTopics });
   },
+);
+
+app.post(
+  "/notifications/test",
+  authenticate,
+  authorize("ADMIN", "MANAGER"),
+  asyncHandler(async (req, res) => {
+    const body = z.object({ target: z.enum(["kitchen", "waiter", "cashier"]) }).parse(req.body);
+    const title =
+      body.target === "kitchen"
+        ? "Test kitchen push"
+        : body.target === "waiter"
+          ? "Test waiter push"
+          : "Test cashier push";
+    const message =
+      body.target === "kitchen"
+        ? "Kitchen phones should receive this when a waiter sends an order."
+        : body.target === "waiter"
+          ? "Waiter phones should receive this when the chef marks food ready."
+          : "Cashier phones should receive payment alerts.";
+
+    const result = await publishNtfy(ntfyTopics[body.target], title, message, "bell,test_tube", "urgent");
+    if (!result.ok) {
+      res.status(502).json({ message: result.message ?? "Push notification failed", result });
+      return;
+    }
+    res.json({ message: `Test push sent to ${body.target}`, result });
+  }),
 );
 
 app.get(
@@ -465,7 +512,7 @@ app.get(
 
     res.json({
       summary,
-      notifications: { baseUrl: ntfyBaseUrl, topics: ntfyTopics },
+      notifications: { enabled: ntfyEnabled, baseUrl: ntfyBaseUrl, topics: ntfyTopics },
       users: setup.users,
       tables: setup.tables,
       categories: setup.categories,

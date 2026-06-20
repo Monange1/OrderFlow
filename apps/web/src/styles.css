@@ -992,7 +992,7 @@ svg {
 
 .topic-list {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 8px 10px;
   align-items: center;
 }
@@ -1008,6 +1008,28 @@ svg {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 12px;
+}
+
+.topic-list a,
+.topic-list button {
+  min-height: 32px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.topic-list a {
+  display: grid;
+  place-items: center;
+  color: var(--brand);
+  background: var(--soft);
+  text-decoration: none;
+}
+
+.topic-list button {
+  background: var(--ink);
+  color: #fff;
 }
 
 .setup-checklist article {
@@ -1251,7 +1273,8 @@ svg {
   }
 
   .ticket-line,
-  .two-inputs {
+  .two-inputs,
+  .topic-list {
     grid-template-columns: 1fr;
   }
 
