@@ -1,0 +1,342 @@
+## Ordering System Implementation Plan
+
+### 1. Main Idea
+
+A **web-based restaurant ordering system** where:
+
+**Waiter enters order → Kitchen receives instantly → Chef updates status → Waiter sees progress**
+
+Example flow:
+
+`Table 4 → Burger x2, Coke x1 → Sent to Kitchen → Preparing → Ready → Served`
+
+---
+
+## 2. Recommended Tech Stack
+
+### Frontend
+
+**Next.js + React + Tailwind CSS**
+
+Best because:
+
+* Fast web app
+* Modern UI
+* Works on tablets, phones, laptops
+* Easy to deploy
+
+### Backend
+
+**Node.js + Express / NestJS**
+
+Use backend for:
+
+* Orders
+* Users
+* Menu items
+* Kitchen updates
+* Reports
+
+### Database
+
+**PostgreSQL**
+
+Good for:
+
+* Orders
+* Tables
+* Menu
+* Payments
+* Reports
+
+### Real-time Updates
+
+**Socket.IO**
+
+Important because kitchen must receive orders instantly without refreshing.
+
+---
+
+## 3. User Roles
+
+### Admin / Manager
+
+* Add menu items
+* Set prices
+* Manage waiters and chefs
+* View reports
+* See daily sales
+
+### Waiter
+
+* Select table
+* Add food/drinks
+* Add notes
+* Send order to kitchen
+* Track order status
+
+### Chef / Kitchen
+
+* See incoming orders
+* Mark order as:
+
+  * Received
+  * Preparing
+  * Ready
+  * Cancelled
+
+### Cashier
+
+* See completed orders
+* Generate bill
+* Mark as paid
+
+---
+
+## 4. Main Features
+
+### Waiter Panel
+
+* Table selection
+* Menu search
+* Category filter
+* Cart/order list
+* Quantity increase/decrease
+* Special instructions
+* Send order button
+* Order status tracking
+
+### Kitchen Display
+
+* Large order cards
+* New orders appear instantly
+* Color/status indicators
+* Timer for each order
+* Buttons:
+
+  * Start Preparing
+  * Ready
+  * Cancel
+
+### Admin Dashboard
+
+* Add/edit/delete menu items
+* Manage categories
+* Manage users
+* View reports
+* Daily, weekly, monthly sales
+
+### Billing
+
+* View table bill
+* Add tax/service charge
+* Discount option
+* Print receipt
+* Mark as paid
+
+---
+
+## 5. UI Design Recommendation
+
+Use a **clean fast tablet-first design**.
+
+### Waiter UI
+
+* Big buttons
+* Menu categories at top
+* Food items as cards
+* Cart fixed on the right side
+* Search bar
+* Table number always visible
+
+### Kitchen UI
+
+* Dark mode preferred
+* Large cards
+* Big readable text
+* Sound alert for new order
+* Status colors:
+
+  * New
+  * Preparing
+  * Ready
+  * Late
+
+### Manager UI
+
+* Dashboard with charts
+* Today’s revenue
+* Active orders
+* Top-selling items
+* Staff activity
+
+---
+
+## 6. Database Tables
+
+Basic structure:
+
+```text
+users
+- id
+- name
+- email
+- password
+- role
+
+tables
+- id
+- table_number
+- status
+
+menu_items
+- id
+- name
+- price
+- category
+- available
+
+orders
+- id
+- table_id
+- waiter_id
+- status
+- total_price
+- created_at
+
+order_items
+- id
+- order_id
+- menu_item_id
+- quantity
+- note
+- price
+
+payments
+- id
+- order_id
+- amount
+- method
+- status
+```
+
+---
+
+## 7. Order Status Flow
+
+```text
+Pending
+↓
+Sent to Kitchen
+↓
+Preparing
+↓
+Ready
+↓
+Served
+↓
+Paid
+```
+
+Optional:
+
+```text
+Cancelled
+```
+
+---
+
+## 8. Development Phases
+
+### Phase 1: MVP
+
+Build the core system first.
+
+Features:
+
+* Login
+* Menu list
+* Waiter creates order
+* Kitchen receives order
+* Chef updates status
+* Basic order history
+
+### Phase 2: Admin Panel
+
+Add:
+
+* Menu management
+* Staff management
+* Table management
+* Basic reports
+
+### Phase 3: Billing
+
+Add:
+
+* Generate bill
+* Mark paid
+* Print receipt
+* Payment method
+
+### Phase 4: Advanced Features
+
+Add:
+
+* QR menu
+* Customer self-ordering
+* Inventory tracking
+* Sales analytics
+* Offline mode
+* Multi-branch support
+
+---
+
+## 9. Extra Recommendations
+
+Add these to make it better:
+
+### 1. Offline Support
+
+If internet goes down, waiter can still take orders locally, then sync later.
+
+### 2. Kitchen Sound Alert
+
+Play a notification sound when a new order arrives.
+
+### 3. Order Timer
+
+Show how long each order has been waiting.
+
+### 4. Item Availability
+
+Chef/admin can mark items as unavailable.
+
+### 5. Role-based Access
+
+Waiters should not access admin reports.
+
+### 6. Mobile/Tablet Friendly
+
+Most waiters will use tablets or phones.
+
+### 7. Receipt Printing
+
+Support small thermal printer later.
+
+---
+
+## 10. Best MVP Stack
+
+For your first version:
+
+```text
+Frontend: Next.js + Tailwind CSS
+Backend: Node.js + Express
+Database: PostgreSQL
+Real-time: Socket.IO
+Authentication: JWT
+Deployment: Render / Railway / VPS
+```
+
+This is fast, modern, and realistic.
