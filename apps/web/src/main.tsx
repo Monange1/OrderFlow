@@ -436,6 +436,7 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
   const [cart, setCart] = useState<Record<string, CartRow>>({});
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [servingId, setServingId] = useState("");
 
   const selectedTable = tables.find((table) => table.id === selectedTableId);
   const cartRows = Object.values(cart);
@@ -548,6 +549,36 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
     }
   }
 
+  async function handleTableTap(table: Table, readyOrder?: Order) {
+    if (!readyOrder) {
+      setSelectedTableId(table.id);
+      return;
+    }
+
+    if (servingId) return;
+    setSelectedTableId(table.id);
+    setServingId(readyOrder.id);
+    const previous = readyOrder;
+    setOrders((current) =>
+      current.map((order) => (order.id === readyOrder.id ? { ...order, status: "SERVED", updatedAt: new Date().toISOString() } : order)),
+    );
+
+    try {
+      const data = await apiFetch<{ order: Order }>(`/orders/${readyOrder.id}/status`, token, {
+        method: "PATCH",
+        timeoutMs: 15000,
+        body: JSON.stringify({ status: "SERVED", note: "Waiter delivered food to table" }),
+      });
+      setOrders((current) => upsertOrder(current, data.order));
+      notify(`Delivered to table ${table.tableNumber}`, false);
+    } catch (err) {
+      setOrders((current) => current.map((order) => (order.id === previous.id ? previous : order)));
+      notify(err instanceof Error ? err.message : "Could not mark delivered");
+    } finally {
+      setServingId("");
+    }
+  }
+
   return (
     <section className="service-grid">
       <div className="floor-column">
@@ -561,15 +592,25 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
         )}
         <div className="table-map">
           {tables.map((table) => {
-            const order = orders.find((row) => row.table.id === table.id && row.status !== "PAID");
+            const tableActiveOrders = orders.filter((row) => row.table.id === table.id && row.status !== "PAID");
+            const readyOrder = tableActiveOrders.find((row) => row.status === "READY");
+            const order = readyOrder ?? tableActiveOrders[0];
             return (
               <button
-                className={`table-seat ${selectedTableId === table.id ? "selected" : ""} ${table.status.toLowerCase()} ${order?.status.toLowerCase() ?? ""}`}
+                className={`table-seat ${selectedTableId === table.id ? "selected" : ""} ${table.status.toLowerCase()} ${order?.status.toLowerCase() ?? ""} ${servingId === readyOrder?.id ? "serving" : ""}`}
                 key={table.id}
-                onClick={() => setSelectedTableId(table.id)}
+                onClick={() => handleTableTap(table, readyOrder)}
               >
                 <strong>{table.tableNumber}</strong>
-                <span>{order ? order.status.replaceAll("_", " ") : "Open"}</span>
+                <span>
+                  {servingId === readyOrder?.id
+                    ? "Serving..."
+                    : readyOrder
+                      ? "Tap when served"
+                      : order
+                        ? order.status.replaceAll("_", " ")
+                        : "Open"}
+                </span>
               </button>
             );
           })}

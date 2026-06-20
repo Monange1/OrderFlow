@@ -472,8 +472,22 @@ svg {
 }
 
 .table-seat.ready {
-  border-color: #9bd4b1;
-  background: #e8f8ee;
+  border-color: #68bd89;
+  background: #dff7e8;
+  box-shadow: 0 14px 28px rgba(19, 122, 99, 0.18);
+}
+
+.table-seat.ready strong {
+  color: #0f513f;
+}
+
+.table-seat.ready span {
+  color: #0f513f;
+}
+
+.table-seat.serving {
+  opacity: 0.72;
+  transform: scale(0.98);
 }
 
 .menu-toolbar {
