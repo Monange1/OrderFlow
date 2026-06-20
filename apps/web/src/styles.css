@@ -591,7 +591,6 @@ svg {
 
 .ticket-head,
 .ticket-total,
-.activity-row,
 .compact-row {
   display: flex;
   justify-content: space-between;
@@ -609,7 +608,18 @@ svg {
 }
 
 .ticket-head strong {
+  display: block;
+  margin-top: 2px;
   font-size: 28px;
+}
+
+.ticket-head > b {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--brand);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .ticket-lines {
@@ -671,15 +681,93 @@ svg {
   font-size: 15px;
 }
 
-.activity-row {
-  padding: 9px 0;
-  border-top: 1px solid #edf0eb;
+.activity-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.activity-head b {
+  min-width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--soft);
+  color: var(--brand);
   font-size: 13px;
 }
 
-.activity-row b {
-  color: var(--brand);
+.order-dropdown {
+  border-top: 1px solid #edf0eb;
+}
+
+.order-dropdown summary {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+  padding: 8px 0;
+}
+
+.order-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.order-dropdown summary::after {
+  content: "⌄";
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  margin-right: -2px;
+  transform: translateY(16px);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.order-dropdown[open] summary::after {
+  content: "⌃";
+}
+
+.order-dropdown summary span {
+  display: grid;
+  gap: 2px;
+}
+
+.order-dropdown summary strong {
   text-transform: capitalize;
+}
+
+.order-dropdown summary small {
+  color: var(--muted);
+}
+
+.order-dropdown summary b {
+  padding-right: 18px;
+  color: var(--brand);
+}
+
+.dropdown-lines {
+  display: grid;
+  gap: 7px;
+  padding: 0 0 10px 12px;
+  border-left: 3px solid var(--soft);
+}
+
+.dropdown-lines div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.dropdown-lines em {
+  grid-column: 1 / -1;
+  color: var(--amber);
 }
 
 .kds-screen {

@@ -149,6 +149,10 @@ function minutesWaiting(order: Order) {
   return Math.max(0, Math.floor((Date.now() - new Date(order.createdAt).getTime()) / 60000));
 }
 
+function statusLabel(status: string) {
+  return status.replaceAll("_", " ").toLowerCase();
+}
+
 function useClock(interval = 30000) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -442,7 +446,9 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
   const cartRows = Object.values(cart);
   const total = cartRows.reduce((sum, row) => sum + row.item.price * row.quantity, 0);
   const readyOrders = orders.filter((order) => order.status === "READY");
-  const tableOrders = selectedTable ? orders.filter((order) => order.table.id === selectedTable.id && order.status !== "PAID") : [];
+  const tableOrders = selectedTable ? sortNewest(orders.filter((order) => order.table.id === selectedTable.id && order.status !== "PAID")) : [];
+  const tableOpenTotal = tableOrders.reduce((sum, order) => sum + order.totalPrice, 0);
+  const isAddOnTicket = tableOrders.length > 0;
 
   const filteredItems = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -644,8 +650,11 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
       </div>
       <aside className="ticket-panel">
         <div className="ticket-head">
-          <span>Current ticket</span>
-          <strong>{selectedTable ? `Table ${selectedTable.tableNumber}` : "No table"}</strong>
+          <div>
+            <span>{isAddOnTicket ? "Add-on ticket" : "Current ticket"}</span>
+            <strong>{selectedTable ? `Table ${selectedTable.tableNumber}` : "No table"}</strong>
+          </div>
+          {isAddOnTicket && <b>{money(tableOpenTotal)} open</b>}
         </div>
         <div className="ticket-lines">
           {cartRows.map((row) => (
@@ -673,17 +682,34 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
         </div>
         <button className="send-button" onClick={sendOrder} disabled={!selectedTable || cartRows.length === 0 || sending}>
           {sending ? <Loader2 /> : <ChefHat />}
-          {sending ? "Sending" : "Send to kitchen"}
+          {sending ? "Sending" : isAddOnTicket ? "Send add-on" : "Send to kitchen"}
         </button>
         <div className="table-activity">
-          <h3>Table activity</h3>
-          {tableOrders.slice(0, 4).map((order) => (
-            <div className="activity-row" key={order.id}>
-              <span>{order.items.map((item) => `${item.quantity} ${item.menuItemName}`).join(", ")}</span>
-              <b>{order.status.replaceAll("_", " ")}</b>
-            </div>
+          <div className="activity-head">
+            <h3>Open orders</h3>
+            {tableOrders.length > 0 && <b>{tableOrders.length}</b>}
+          </div>
+          {tableOrders.map((order, index) => (
+            <details className="order-dropdown" key={order.id} open={index === 0}>
+              <summary>
+                <span>
+                  <strong>{statusLabel(order.status)}</strong>
+                  <small>{order.items.length} item{order.items.length === 1 ? "" : "s"}</small>
+                </span>
+                <b>{money(order.totalPrice)}</b>
+              </summary>
+              <div className="dropdown-lines">
+                {order.items.map((item) => (
+                  <div key={item.id}>
+                    <span>{item.quantity}x {item.menuItemName}</span>
+                    <b>{money(item.lineTotal)}</b>
+                    {item.note && <em>{item.note}</em>}
+                  </div>
+                ))}
+              </div>
+            </details>
           ))}
-          {tableOrders.length === 0 && <p>No active orders for this table.</p>}
+          {tableOrders.length === 0 && <p>No open orders for this table.</p>}
         </div>
       </aside>
     </section>
