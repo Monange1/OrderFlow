@@ -738,16 +738,15 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
   async function ready(order: Order) {
     if (workingId) return;
     setWorkingId(order.id);
-    setOrders((current) => current.filter((row) => row.id !== order.id));
     try {
       await apiFetch<{ order: Order }>(`/orders/${order.id}/status`, token, {
         method: "PATCH",
         timeoutMs: 15000,
         body: JSON.stringify({ status: "READY", note: "Kitchen marked ready" }),
       });
+      setOrders((current) => current.filter((row) => row.id !== order.id));
       notify(`Waiter notified: table ${order.table.tableNumber}`, false);
     } catch (err) {
-      setOrders((current) => sortOldest([...current, order]));
       notify(err instanceof Error ? err.message : "Could not mark ready");
     } finally {
       setWorkingId("");
@@ -766,7 +765,7 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
         {orders.map((order) => {
           const age = minutesWaiting(order);
           return (
-            <article className={`kds-ticket ${age >= 15 ? "late" : age >= 8 ? "warn" : ""}`} key={order.id}>
+            <article className={`kds-ticket ${age >= 15 ? "late" : age >= 8 ? "warn" : ""} ${workingId === order.id ? "working" : ""}`} key={order.id}>
               <header>
                 <div>
                   <span>Table</span>
@@ -785,7 +784,7 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
               </div>
               <button className="ready-button" onClick={() => ready(order)} disabled={workingId === order.id}>
                 {workingId === order.id ? <Loader2 /> : <Check />}
-                Ready
+                {workingId === order.id ? "Notifying waiter..." : "Ready"}
               </button>
             </article>
           );

@@ -759,6 +759,14 @@ svg {
   border-top-color: var(--red);
 }
 
+.kds-ticket.working {
+  opacity: 0.72;
+}
+
+.kds-ticket.working .kds-items {
+  filter: grayscale(0.3);
+}
+
 .kds-ticket header {
   display: flex;
   justify-content: space-between;
@@ -824,6 +832,12 @@ svg {
 
 .ready-button:hover {
   background: #dff4e6;
+}
+
+.ready-button:disabled {
+  opacity: 1;
+  background: #f4c36d;
+  color: #201604;
 }
 
 .bill-list {
