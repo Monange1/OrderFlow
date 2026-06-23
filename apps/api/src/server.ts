@@ -284,7 +284,8 @@ async function emitOrder(orderId: string, eventName = "order:status_changed") {
   io.to(`table:${order.tableId}`).emit(eventName, payload);
 }
 
-async function refreshTableStatus(tableId: string) {
+async function refreshTableStatus(tableId: string | null) {
+  if (!tableId) return;
   const activeCount = await prisma.order.count({
     where: { tableId, status: { in: activeStatuses } },
   });
@@ -784,7 +785,9 @@ app.post(
   asyncHandler(async (req, res) => {
     const body = z
       .object({
-        tableId: z.string().min(1),
+        orderType: z.enum(["DINE_IN", "TAKEAWAY"]).default("DINE_IN"),
+        customerName: z.string().optional(),
+        tableId: z.string().optional(),
         notes: z.string().optional(),
         items: z
           .array(
@@ -800,6 +803,15 @@ app.post(
         tableNumber: z.string().optional(),
       })
       .parse(req.body);
+
+    if (body.orderType === "DINE_IN" && !body.tableId) {
+      res.status(400).json({ message: "Dine-in orders require a table" });
+      return;
+    }
+    if (body.orderType === "TAKEAWAY" && !body.customerName) {
+      res.status(400).json({ message: "Takeaway orders require a customer name" });
+      return;
+    }
 
     const canFastAck = body.items.every((item) => item.menuItemName && item.unitPrice);
 
@@ -823,7 +835,9 @@ app.post(
       const subtotal = preparedItems.reduce((sum, item) => sum + item.lineTotal, 0);
       const payload = {
         id: orderId,
-        tableId: body.tableId,
+        orderType: body.orderType,
+        customerName: body.customerName,
+        tableId: body.tableId || null,
         waiterId: req.user!.id,
         status: "SENT_TO_KITCHEN",
         subtotal,
@@ -834,14 +848,14 @@ app.post(
         notes: body.notes,
         createdAt: now,
         updatedAt: now,
-        table: {
+        table: body.tableId ? {
           id: body.tableId,
           tableNumber: body.tableNumber ?? "?",
           status: "OCCUPIED",
           seats: 0,
           createdAt: now,
           updatedAt: now,
-        },
+        } : null,
         waiter: publicUser(req.user!),
         items: preparedItems,
         payments: [],
@@ -851,12 +865,14 @@ app.post(
       pendingOrders.set(orderId, {
         payload,
         waiterId: req.user!.id,
-        tableId: body.tableId,
+        tableId: body.tableId || "",
       });
       io.to("kitchen").emit("order:created", payload);
       io.to("managers").emit("order:created", payload);
       io.to(`waiter:${req.user!.id}`).emit("order:created", payload);
-      io.emit("table:status_changed", { id: body.tableId, status: "OCCUPIED" });
+      if (body.orderType === "DINE_IN" && body.tableId) {
+        io.emit("table:status_changed", { id: body.tableId, status: "OCCUPIED" });
+      }
       notifyKitchenOrder(payload);
       clearOrdersCache();
       clearSummaryCache();
@@ -867,7 +883,9 @@ app.post(
           await tx.order.create({
             data: {
               id: orderId,
-              tableId: body.tableId,
+              orderType: body.orderType,
+              customerName: body.customerName,
+              tableId: body.tableId || null,
               waiterId: req.user!.id,
               notes: body.notes,
               subtotal: subtotal.toFixed(2),
@@ -887,7 +905,9 @@ app.post(
               },
             },
           });
-          await tx.diningTable.update({ where: { id: body.tableId }, data: { status: "OCCUPIED" } });
+          if (body.orderType === "DINE_IN" && body.tableId) {
+            await tx.diningTable.update({ where: { id: body.tableId }, data: { status: "OCCUPIED" } });
+          }
 
           const pending = pendingOrders.get(orderId);
           if (pending?.queuedStatus) {
@@ -945,10 +965,12 @@ app.post(
 
     const subtotal = preparedItems.reduce((sum, item) => sum + Number(item.lineTotal), 0);
 
-    const [order, table] = await prisma.$transaction([
+    const txOperations: any[] = [
       prisma.order.create({
         data: {
-          tableId: body.tableId,
+          orderType: body.orderType,
+          customerName: body.customerName,
+          tableId: body.tableId || null,
           waiterId: req.user!.id,
           notes: body.notes,
           subtotal: subtotal.toFixed(2),
@@ -959,8 +981,17 @@ app.post(
           },
         },
       }),
-      prisma.diningTable.update({ where: { id: body.tableId }, data: { status: "OCCUPIED" } }),
-    ]);
+    ];
+
+    if (body.orderType === "DINE_IN" && body.tableId) {
+      txOperations.push(
+        prisma.diningTable.update({ where: { id: body.tableId }, data: { status: "OCCUPIED" } })
+      );
+    }
+
+    const txResults = await prisma.$transaction(txOperations);
+    const order = txResults[0];
+    const table = body.orderType === "DINE_IN" ? txResults[1] : null;
 
     const payload = {
       ...order,
@@ -984,7 +1015,9 @@ app.post(
     io.to("kitchen").emit("order:created", payload);
     io.to("managers").emit("order:created", payload);
     io.to(`waiter:${order.waiterId}`).emit("order:created", payload);
-    io.emit("table:status_changed", { id: body.tableId, status: "OCCUPIED" });
+    if (body.orderType === "DINE_IN" && body.tableId) {
+      io.emit("table:status_changed", { id: body.tableId, status: "OCCUPIED" });
+    }
     notifyKitchenOrder(payload);
     clearOrdersCache();
     clearSummaryCache();
@@ -1053,7 +1086,7 @@ app.patch(
 app.post(
   "/payments",
   authenticate,
-  authorize("CASHIER", "ADMIN", "MANAGER"),
+  authorize("CASHIER", "ADMIN", "MANAGER", "WAITER"),
   asyncHandler(async (req, res) => {
     const body = z
       .object({

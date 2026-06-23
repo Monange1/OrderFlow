@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: orderflow-api
+    env: node
+    buildCommand: npm install && npm run build:api && npm run db:generate
+    startCommand: npm run start:api
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false
+      - key: PORT
+        value: "4000"

@@ -48,13 +48,15 @@ type OrderItem = {
 };
 type Order = {
   id: string;
+  orderType: "DINE_IN" | "TAKEAWAY";
+  customerName?: string;
   status: string;
   subtotal: number;
   totalPrice: number;
   notes?: string;
   createdAt: string;
   updatedAt?: string;
-  table: Table;
+  table?: Table;
   waiter: User;
   items: OrderItem[];
 };
@@ -442,12 +444,14 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [servingId, setServingId] = useState("");
+  const [orderType, setOrderType] = useState<"DINE_IN" | "TAKEAWAY">("DINE_IN");
+  const [customerName, setCustomerName] = useState("");
 
   const selectedTable = tables.find((table) => table.id === selectedTableId);
   const cartRows = Object.values(cart);
   const total = cartRows.reduce((sum, row) => sum + row.item.price * row.quantity, 0);
   const readyOrders = orders.filter((order) => order.status === "READY");
-  const tableOrders = selectedTable ? sortNewest(orders.filter((order) => order.table.id === selectedTable.id && order.status !== "PAID")) : [];
+  const tableOrders = (selectedTable && orderType === "DINE_IN") ? sortNewest(orders.filter((order) => order.table?.id === selectedTable.id && order.status !== "PAID")) : [];
   const tableOpenTotal = tableOrders.reduce((sum, order) => sum + order.totalPrice, 0);
   const isAddOnTicket = tableOrders.length > 0;
 
@@ -523,15 +527,23 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
   }
 
   async function sendOrder() {
-    if (!selectedTable || cartRows.length === 0 || sending) return;
+    if (orderType === "DINE_IN" && !selectedTable) return;
+    if (orderType === "TAKEAWAY" && !customerName.trim()) {
+      notify("Please enter a customer name");
+      return;
+    }
+    if (cartRows.length === 0 || sending) return;
     setSending(true);
     try {
+      const payload = orderType === "DINE_IN"
+        ? { orderType: "DINE_IN", tableId: selectedTable!.id, tableNumber: selectedTable!.tableNumber }
+        : { orderType: "TAKEAWAY", customerName: customerName.trim() };
+
       const data = await apiFetch<{ order: Order }>("/orders", token, {
         method: "POST",
         timeoutMs: 5000,
         body: JSON.stringify({
-          tableId: selectedTable.id,
-          tableNumber: selectedTable.tableNumber,
+          ...payload,
           items: cartRows.map((row) => ({
             menuItemId: row.item.id,
             menuItemName: row.item.name,
@@ -543,7 +555,8 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
       });
       setOrders((current) => upsertOrder(current, data.order));
       setCart({});
-      notify(`Sent to kitchen: table ${data.order.table.tableNumber}`);
+      if (orderType === "TAKEAWAY") setCustomerName("");
+      notify(`Sent to kitchen: ${orderType === "TAKEAWAY" ? customerName : `table ${data.order.table?.tableNumber}`}`);
     } catch (err) {
       notify(err instanceof Error ? `Order not sent: ${err.message}` : "Order not sent");
     } finally {
@@ -576,6 +589,29 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
     } catch (err) {
       setOrders((current) => current.map((order) => (order.id === previous.id ? previous : order)));
       notify(err instanceof Error ? err.message : "Could not mark delivered");
+      setServingId("");
+    }
+  }
+
+  async function handleTakeawayTook(order: Order) {
+    if (servingId || order.status !== "READY") return;
+    setServingId(order.id);
+    const previous = order;
+    setOrders((current) =>
+      current.map((row) => (row.id === order.id ? { ...row, status: "SERVED", updatedAt: new Date().toISOString() } : row)),
+    );
+
+    try {
+      const data = await apiFetch<{ order: Order }>(`/orders/${order.id}/status`, token, {
+        method: "PATCH",
+        timeoutMs: 15000,
+        body: JSON.stringify({ status: "SERVED", note: "Takeaway handed to customer" }),
+      });
+      setOrders((current) => upsertOrder(current, data.order));
+      notify(`Handed to ${order.customerName}`, false);
+    } catch (err) {
+      setOrders((current) => current.map((row) => (row.id === previous.id ? previous : row)));
+      notify(err instanceof Error ? err.message : "Could not mark as taken");
     } finally {
       setServingId("");
     }
@@ -589,35 +625,72 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
         {readyOrders.length > 0 && (
           <div className="ready-ribbon">
             <Bell />
-            {readyOrders.length} table{readyOrders.length > 1 ? "s" : ""} ready for pickup
+            {readyOrders.length} order{readyOrders.length > 1 ? "s" : ""} ready for pickup
           </div>
         )}
-        <div className="table-map">
-          {tables.map((table) => {
-            const tableActiveOrders = orders.filter((row) => row.table.id === table.id && row.status !== "PAID");
-            const readyOrder = tableActiveOrders.find((row) => row.status === "READY");
-            const order = readyOrder ?? tableActiveOrders[0];
-            return (
-              <button
-                className={`table-seat ${selectedTableId === table.id ? "selected" : ""} ${table.status.toLowerCase()} ${order?.status.toLowerCase() ?? ""} ${servingId === readyOrder?.id ? "serving" : ""}`}
-                key={table.id}
-                onClick={() => handleTableTap(table, readyOrder)}
-              >
-                <strong>{table.tableNumber}</strong>
-                <span>
-                  {servingId === readyOrder?.id
-                    ? "Serving..."
-                    : readyOrder
-                      ? "Tap when served"
-                      : order
-                        ? order.status.replaceAll("_", " ")
-                        : "Open"}
-                </span>
-              </button>
-            );
-          })}
-          {!loading && tables.length === 0 && <EmptyState icon={<Grid3X3 />} title="No tables yet" text="Admin needs to set the table count before waiters can order." />}
+        <div className="order-type-toggle">
+          <button className={orderType === "DINE_IN" ? "selected" : ""} onClick={() => setOrderType("DINE_IN")}>Dine-in</button>
+          <button className={orderType === "TAKEAWAY" ? "selected" : ""} onClick={() => setOrderType("TAKEAWAY")}>Takeaway</button>
         </div>
+        {orderType === "DINE_IN" ? (
+          <div className="table-map">
+            {tables.map((table) => {
+              const tableActiveOrders = orders.filter((row) => row.table?.id === table.id && row.status !== "PAID");
+              const readyOrder = tableActiveOrders.find((row) => row.status === "READY");
+              const order = readyOrder ?? tableActiveOrders[0];
+              return (
+                <button
+                  className={`table-seat ${selectedTableId === table.id ? "selected" : ""} ${table.status.toLowerCase()} ${order?.status.toLowerCase() ?? ""} ${servingId === readyOrder?.id ? "serving" : ""}`}
+                  key={table.id}
+                  onClick={() => handleTableTap(table, readyOrder)}
+                >
+                  <strong>{table.tableNumber}</strong>
+                  <span>
+                    {servingId === readyOrder?.id
+                      ? "Serving..."
+                      : readyOrder
+                        ? "Tap when served"
+                        : order
+                          ? order.status.replaceAll("_", " ")
+                          : "Open"}
+                  </span>
+                </button>
+              );
+            })}
+            {!loading && tables.length === 0 && <EmptyState icon={<Grid3X3 />} title="No tables yet" text="Admin needs to set the table count before waiters can order." />}
+          </div>
+        ) : (
+          <div className="takeaway-section">
+            <div className="takeaway-input">
+              <input 
+                placeholder="Customer Name (e.g. John Doe)" 
+                value={customerName} 
+                onChange={(e) => setCustomerName(e.target.value)} 
+              />
+            </div>
+            <div className="takeaway-list">
+              {orders.filter(o => o.orderType === "TAKEAWAY" && o.status !== "PAID").map(order => (
+                <div className={`takeaway-card ${order.status.toLowerCase()}`} key={order.id}>
+                  <div className="takeaway-info">
+                    <strong>{order.customerName || "No name"}</strong>
+                    <span>{order.status === "READY" ? "Ready for pickup" : order.status.replaceAll("_", " ")}</span>
+                  </div>
+                  <button 
+                    className={order.status === "READY" ? "solid" : ""} 
+                    disabled={servingId === order.id || order.status !== "READY"}
+                    onClick={() => handleTakeawayTook(order)}
+                  >
+                    {servingId === order.id ? <Loader2 /> : <Check />}
+                    {order.status === "SERVED" ? "Taken" : order.status === "READY" ? "Took" : "Pending"}
+                  </button>
+                </div>
+              ))}
+              {!loading && orders.filter(o => o.orderType === "TAKEAWAY" && o.status !== "PAID").length === 0 && (
+                <EmptyState icon={<Sparkles />} title="No active takeaways" text="Pending and ready takeaway orders will appear here." />
+              )}
+            </div>
+          </div>
+        )}
         <div className="menu-toolbar">
           <div className="search-box">
             <Search size={18} />
@@ -648,7 +721,7 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
         <div className="ticket-head">
           <div>
             <span>{isAddOnTicket ? "Add-on ticket" : "Current ticket"}</span>
-            <strong>{selectedTable ? `Table ${selectedTable.tableNumber}` : "No table"}</strong>
+            <strong>{orderType === "DINE_IN" ? (selectedTable ? `Table ${selectedTable.tableNumber}` : "No table") : `Takeaway: ${customerName || "No name"}`}</strong>
           </div>
           {isAddOnTicket && <b>{money(tableOpenTotal)} open</b>}
         </div>
@@ -676,7 +749,7 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
           <span>Total</span>
           <strong>{money(total)}</strong>
         </div>
-        <button className="send-button" onClick={sendOrder} disabled={!selectedTable || cartRows.length === 0 || sending}>
+        <button className="send-button" onClick={sendOrder} disabled={(orderType === "DINE_IN" && !selectedTable) || (orderType === "TAKEAWAY" && !customerName.trim()) || cartRows.length === 0 || sending}>
           {sending ? <Loader2 /> : <ChefHat />}
           {sending ? "Sending" : isAddOnTicket ? "Send add-on" : "Send to kitchen"}
         </button>
@@ -741,7 +814,7 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
     };
     const created = (order: Order) => {
       sync(order);
-      notify(`New order for table ${order.table.tableNumber}`);
+      notify(`New order: ${order.orderType === "TAKEAWAY" ? "Takeaway" : `Table ${order.table?.tableNumber}`}`);
     };
     const failed = ({ orderId, message }: { orderId: string; message: string }) => {
       setOrders((current) => current.filter((order) => order.id !== orderId));
@@ -767,7 +840,7 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
         body: JSON.stringify({ status: "READY", note: "Kitchen marked ready" }),
       });
       setOrders((current) => current.filter((row) => row.id !== order.id));
-      notify(`Waiter notified: table ${order.table.tableNumber}`, false);
+      notify(`Waiter notified: ${order.orderType === "TAKEAWAY" ? "Takeaway" : `Table ${order.table?.tableNumber}`}`, false);
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not mark ready");
     } finally {
@@ -790,8 +863,8 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
             <article className={`kds-ticket ${age >= 15 ? "late" : age >= 8 ? "warn" : ""} ${workingId === order.id ? "working" : ""}`} key={order.id}>
               <header>
                 <div>
-                  <span>Table</span>
-                  <strong>{order.table.tableNumber}</strong>
+                  <span>{order.orderType === "TAKEAWAY" ? "Takeaway" : "Table"}</span>
+                  <strong>{order.orderType === "TAKEAWAY" ? order.customerName || "?" : order.table?.tableNumber}</strong>
                 </div>
                 <b>{age}m</b>
               </header>
@@ -861,7 +934,7 @@ function CashierDesk({ token, socket, notify }: { token: string; socket: Socket 
         body: JSON.stringify({ orderId: order.id, method: "CASH" }),
       });
       setOrders((current) => current.filter((row) => row.id !== order.id));
-      notify(`Payment recorded for table ${order.table.tableNumber}`, false);
+      notify(`Payment recorded for ${order.orderType === "TAKEAWAY" ? "Takeaway" : `Table ${order.table?.tableNumber}`}`, false);
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not record payment");
     } finally {
@@ -877,8 +950,8 @@ function CashierDesk({ token, socket, notify }: { token: string; socket: Socket 
         {orders.map((order) => (
           <article className="bill-card" key={order.id}>
             <div className="bill-table">
-              <span>Table</span>
-              <strong>{order.table.tableNumber}</strong>
+              <span>{order.orderType === "TAKEAWAY" ? "Takeaway" : "Table"}</span>
+              <strong>{order.orderType === "TAKEAWAY" ? order.customerName || "?" : order.table?.tableNumber}</strong>
             </div>
             <div>
               <strong>{order.items.map((item) => `${item.quantity} ${item.menuItemName}`).join(", ")}</strong>
