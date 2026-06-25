@@ -17,6 +17,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Trash2,
   UserRound,
   Utensils,
   Volume2,
@@ -1126,6 +1127,28 @@ function AdminSetup({ token, notify }: { token: string; notify: (value: string, 
     setItems((current) => current.map((row) => (row.id === item.id ? data.item : row)));
   }
 
+  async function deleteItem(id: string) {
+    if (!window.confirm("Are you sure you want to delete this menu item?")) return;
+    try {
+      await apiFetch(`/menu/items/${id}`, token, { method: "DELETE" });
+      setItems((current) => current.filter((item) => item.id !== id));
+      notify("Menu item deleted", false);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not delete item");
+    }
+  }
+
+  async function deleteCategory(id: string) {
+    if (!window.confirm("Are you sure you want to delete this category?")) return;
+    try {
+      await apiFetch(`/menu/categories/${id}`, token, { method: "DELETE" });
+      setCategories((current) => current.filter((cat) => cat.id !== id));
+      notify("Category deleted", false);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not delete category");
+    }
+  }
+
   async function testPush(target: "kitchen" | "waiter" | "cashier") {
     setTestingPush(target);
     try {
@@ -1240,10 +1263,22 @@ function AdminSetup({ token, notify }: { token: string; notify: (value: string, 
             {items.map((item) => (
               <div className="compact-row" key={item.id}>
                 <span>{item.name}</span>
-                <button onClick={() => toggleItem(item)}>{item.available ? "On" : "Off"}</button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => toggleItem(item)}>{item.available ? "On" : "Off"}</button>
+                  <button onClick={() => deleteItem(item.id)} title="Delete item" style={{ padding: '0 8px', color: '#d9534f' }}><Trash2 size={16} /></button>
+                </div>
               </div>
             ))}
             {items.length === 0 && <p>No menu items yet.</p>}
+          </ListPanel>
+          <ListPanel title="Categories">
+            {categories.map((category) => (
+              <div className="compact-row" key={category.id}>
+                <span>{category.name}</span>
+                <button onClick={() => deleteCategory(category.id)} title="Delete category" style={{ padding: '0 8px', color: '#d9534f' }}><Trash2 size={16} /></button>
+              </div>
+            ))}
+            {categories.length === 0 && <p>No categories yet.</p>}
           </ListPanel>
         </aside>
       </div>
