@@ -757,17 +757,9 @@ app.delete(
   authenticate,
   authorize("ADMIN", "MANAGER"),
   asyncHandler(async (req, res) => {
-    try {
-      await prisma.menuCategory.delete({ where: { id: String(req.params.id) } });
-      clearSetupCache();
-      res.json({ success: true });
-    } catch (err: any) {
-      if (err.code === "P2003") {
-        res.status(400).json({ message: "Cannot delete this category because it contains menu items." });
-      } else {
-        throw err;
-      }
-    }
+    await prisma.menuCategory.delete({ where: { id: String(req.params.id) } });
+    clearSetupCache();
+    res.json({ success: true });
   })
 );
 
@@ -776,17 +768,9 @@ app.delete(
   authenticate,
   authorize("ADMIN", "MANAGER"),
   asyncHandler(async (req, res) => {
-    try {
-      await prisma.menuItem.delete({ where: { id: String(req.params.id) } });
-      clearSetupCache();
-      res.json({ success: true });
-    } catch (err: any) {
-      if (err.code === "P2003") {
-        res.status(400).json({ message: "Cannot delete this item because it has been ordered. Try turning it Off instead." });
-      } else {
-        throw err;
-      }
-    }
+    await prisma.menuItem.delete({ where: { id: String(req.params.id) } });
+    clearSetupCache();
+    res.json({ success: true });
   })
 );
 

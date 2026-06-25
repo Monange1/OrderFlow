@@ -95,8 +95,8 @@ model MenuItem {
   price       Decimal
   available   Boolean      @default(true)
   imageUrl    String?
-  categoryId  String
-  category    MenuCategory @relation(fields: [categoryId], references: [id])
+  categoryId  String?
+  category    MenuCategory? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   orderItems  OrderItem[]
@@ -135,14 +135,14 @@ model Order {
 model OrderItem {
   id               String   @id @default(cuid())
   orderId          String
-  menuItemId       String
+  menuItemId       String?
   menuItemName     String
   quantity         Int
   note             String?
   unitPrice        Decimal
   lineTotal        Decimal
   order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  menuItem         MenuItem @relation(fields: [menuItemId], references: [id])
+  menuItem         MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
 }
