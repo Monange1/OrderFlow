@@ -34,8 +34,9 @@ const ntfyEnabled = process.env.NTFY_ENABLED !== "false";
 // No-op io shim — Vercel serverless cannot maintain WebSocket connections.
 // Real-time updates are handled by client-side polling instead.
 const io = {
-  emit: () => {},
-  to: () => ({ emit: () => {} }),
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  emit: (..._args: unknown[]) => {},
+  to: (..._args: unknown[]) => ({ emit: (...__args: unknown[]) => {} }),
 };
 
 const transactionOptions = { timeout: 15000, maxWait: 15000 };
