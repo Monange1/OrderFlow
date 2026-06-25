@@ -6,7 +6,6 @@ import helmet from "helmet";
 import http from "node:http";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
-import { Server } from "socket.io";
 import { z } from "zod";
 import {
   OrderStatus,
@@ -20,7 +19,6 @@ import {
 
 const prisma = new PrismaClient();
 const app = express();
-const server = http.createServer(app);
 const port = Number(process.env.PORT ?? 4000);
 const corsOrigin = process.env.CORS_ORIGIN ?? "http://localhost:3000";
 const jwtSecret = process.env.JWT_SECRET ?? "dev-secret";
@@ -33,12 +31,12 @@ const ntfyTopics = {
 };
 const ntfyEnabled = process.env.NTFY_ENABLED !== "false";
 
-const io = new Server(server, {
-  cors: {
-    origin: corsOrigin,
-    credentials: true,
-  },
-});
+// No-op io shim — Vercel serverless cannot maintain WebSocket connections.
+// Real-time updates are handled by client-side polling instead.
+const io = {
+  emit: () => {},
+  to: () => ({ emit: () => {} }),
+};
 
 const transactionOptions = { timeout: 15000, maxWait: 15000 };
 
@@ -269,19 +267,10 @@ async function orderInclude() {
   };
 }
 
-async function emitOrder(orderId: string, eventName = "order:status_changed") {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: await orderInclude(),
-  });
-  if (!order) return;
-
-  const payload = serializeOrder(order);
-  io.to("kitchen").emit(eventName, payload);
-  io.to("cashier").emit(eventName, payload);
-  io.to("managers").emit(eventName, payload);
-  io.to(`waiter:${order.waiterId}`).emit(eventName, payload);
-  io.to(`table:${order.tableId}`).emit(eventName, payload);
+async function emitOrder(orderId: string, _eventName = "order:status_changed") {
+  // No-op: real-time push not available on Vercel serverless.
+  // Clients use polling to refresh order state.
+  void orderId;
 }
 
 async function refreshTableStatus(tableId: string | null) {
@@ -290,8 +279,8 @@ async function refreshTableStatus(tableId: string | null) {
     where: { tableId, status: { in: activeStatuses } },
   });
   const status: TableStatus = activeCount > 0 ? "OCCUPIED" : "AVAILABLE";
-  const table = await prisma.diningTable.update({ where: { id: tableId }, data: { status } });
-  io.emit("table:status_changed", table);
+  await prisma.diningTable.update({ where: { id: tableId }, data: { status } });
+  // No socket emit — clients will poll for table status changes.
 }
 
 async function summaryReport() {
@@ -1164,37 +1153,6 @@ app.get(
   }),
 );
 
-io.use(async (socket, next) => {
-  try {
-    const token = socket.handshake.auth?.token;
-    if (!token) throw new Error("Missing token");
-    const payload = jwt.verify(token, jwtSecret) as TokenPayload;
-    socket.data.user = {
-      id: payload.sub,
-      name: payload.name,
-      email: payload.email,
-      role: payload.role,
-      active: true,
-    };
-    next();
-  } catch {
-    next(new Error("Socket authentication failed"));
-  }
-});
-
-io.on("connection", (socket) => {
-  const user = socket.data.user as AuthUser;
-  socket.join(`waiter:${user.id}`);
-
-  if (["CHEF", "ADMIN", "MANAGER"].includes(user.role)) socket.join("kitchen");
-  if (["CASHIER", "ADMIN", "MANAGER"].includes(user.role)) socket.join("cashier");
-  if (["ADMIN", "MANAGER"].includes(user.role)) socket.join("managers");
-
-  socket.on("table:join", (tableId: string) => {
-    socket.join(`table:${tableId}`);
-  });
-});
-
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof z.ZodError) {
     res.status(400).json({ message: "Validation failed", issues: error.issues });
@@ -1206,6 +1164,13 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(status || 500).json({ message });
 });
 
-server.listen(port, () => {
-  console.log(`Ordering API listening on http://localhost:${port}`);
-});
+// Export the Express app for Vercel serverless.
+export default app;
+
+// Start a standalone HTTP server only when running locally (not imported by Vercel).
+if (process.env.VERCEL !== "1") {
+  const server = http.createServer(app);
+  server.listen(port, () => {
+    console.log(`Ordering API listening on http://localhost:${port}`);
+  });
+}

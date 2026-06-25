@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useRef, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { io, Socket } from "socket.io-client";
 import {
   Banknote,
   Bell,
@@ -75,9 +74,19 @@ type NotificationTopics = {
 };
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? API_URL;
+const POLL_INTERVAL = 5000;
 const activeKitchenStatuses = ["SENT_TO_KITCHEN", "RECEIVED", "PREPARING"];
 const billStatuses = ["READY", "SERVED"];
+
+function usePolling(fn: () => void, intervalMs: number, enabled = true) {
+  const savedFn = useRef(fn);
+  useEffect(() => { savedFn.current = fn; });
+  useEffect(() => {
+    if (!enabled) return;
+    const id = window.setInterval(() => savedFn.current(), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs, enabled]);
+}
 
 type ApiOptions = RequestInit & { timeoutMs?: number };
 
@@ -206,7 +215,6 @@ function App() {
   });
   const [view, setView] = useState<View>(() => viewFromPath());
   const [checking, setChecking] = useState(true);
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [notice, setNotice] = useState("");
 
   function go(next: View, replace = false) {
@@ -237,7 +245,6 @@ function App() {
   }
 
   function logout() {
-    socket?.disconnect();
     localStorage.clear();
     setToken("");
     setUser(null);
@@ -265,13 +272,6 @@ function App() {
       .catch(logout)
       .finally(() => setChecking(false));
   }, [token]);
-
-  useEffect(() => {
-    if (!token || !user) return;
-    const next = io(SOCKET_URL, { auth: { token } });
-    setSocket(next);
-    return () => next.disconnect();
-  }, [token, user]);
 
   useEffect(() => {
     if (user && view !== "login" && !canAccess(user.role, view)) go(roleHome(user.role), true);
@@ -316,9 +316,9 @@ function App() {
             {notice}
           </div>
         )}
-        {view === "waiter" && <WaiterService token={token} socket={socket} notify={notify} />}
-        {view === "kitchen" && <KitchenDisplay token={token} socket={socket} notify={notify} />}
-        {view === "cashier" && <CashierDesk token={token} socket={socket} notify={notify} />}
+        {view === "waiter" && <WaiterService token={token} notify={notify} />}
+        {view === "kitchen" && <KitchenDisplay token={token} notify={notify} />}
+        {view === "cashier" && <CashierDesk token={token} notify={notify} />}
         {view === "admin" && <AdminSetup token={token} notify={notify} />}
       </main>
     </div>
@@ -433,7 +433,7 @@ function AccessScreen({ initialView, onLogin }: { initialView: View; onLogin: (t
   );
 }
 
-function WaiterService({ token, socket, notify }: { token: string; socket: Socket | null; notify: (value: string, audible?: boolean) => void }) {
+function WaiterService({ token, notify }: { token: string; notify: (value: string, audible?: boolean) => void }) {
   const [tables, setTables] = useState<Table[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -482,33 +482,9 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
     });
   }, []);
 
-  useEffect(() => {
-    if (!socket) return;
-    const onOrder = (order: Order) => {
-      setOrders((current) => upsertOrder(current, order));
-      if (order.status === "READY") notify(`Table ${order.table.tableNumber} is ready`);
-    };
-    const onTable = (payload: Table | { setup?: boolean; tables?: Table[] }) => {
-      if ("setup" in payload && payload.tables) setTables(payload.tables);
-      if ("id" in payload) setTables((current) => current.map((table) => (table.id === payload.id ? { ...table, ...payload } : table)));
-    };
-    const onFailed = ({ orderId, message }: { orderId: string; message: string }) => {
-      setOrders((current) => current.filter((order) => order.id !== orderId));
-      notify(message);
-    };
-    socket.on("order:created", onOrder);
-    socket.on("order:status_changed", onOrder);
-    socket.on("payment:completed", onOrder);
-    socket.on("table:status_changed", onTable);
-    socket.on("order:failed", onFailed);
-    return () => {
-      socket.off("order:created", onOrder);
-      socket.off("order:status_changed", onOrder);
-      socket.off("payment:completed", onOrder);
-      socket.off("table:status_changed", onTable);
-      socket.off("order:failed", onFailed);
-    };
-  }, [socket]);
+  usePolling(() => {
+    load().catch(() => {});
+  }, POLL_INTERVAL, !!token);
 
   function addItem(item: MenuItem) {
     setCart((current) => ({
@@ -786,7 +762,7 @@ function WaiterService({ token, socket, notify }: { token: string; socket: Socke
   );
 }
 
-function KitchenDisplay({ token, socket, notify }: { token: string; socket: Socket | null; notify: (value: string, audible?: boolean) => void }) {
+function KitchenDisplay({ token, notify }: { token: string; notify: (value: string, audible?: boolean) => void }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState("");
@@ -805,31 +781,9 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
     });
   }, []);
 
-  useEffect(() => {
-    if (!socket) return;
-    const sync = (order: Order) => {
-      setOrders((current) => {
-        const without = current.filter((row) => row.id !== order.id);
-        return activeKitchenStatuses.includes(order.status) ? sortOldest([...without, order]) : without;
-      });
-    };
-    const created = (order: Order) => {
-      sync(order);
-      notify(`New order: ${order.orderType === "TAKEAWAY" ? "Takeaway" : `Table ${order.table?.tableNumber}`}`);
-    };
-    const failed = ({ orderId, message }: { orderId: string; message: string }) => {
-      setOrders((current) => current.filter((order) => order.id !== orderId));
-      notify(message);
-    };
-    socket.on("order:created", created);
-    socket.on("order:status_changed", sync);
-    socket.on("order:failed", failed);
-    return () => {
-      socket.off("order:created", created);
-      socket.off("order:status_changed", sync);
-      socket.off("order:failed", failed);
-    };
-  }, [socket]);
+  usePolling(() => {
+    load().catch(() => {});
+  }, POLL_INTERVAL, !!token);
 
   async function ready(order: Order) {
     if (workingId) return;
@@ -891,7 +845,7 @@ function KitchenDisplay({ token, socket, notify }: { token: string; socket: Sock
   );
 }
 
-function CashierDesk({ token, socket, notify }: { token: string; socket: Socket | null; notify: (value: string, audible?: boolean) => void }) {
+function CashierDesk({ token, notify }: { token: string; notify: (value: string, audible?: boolean) => void }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [payingId, setPayingId] = useState("");
@@ -909,23 +863,9 @@ function CashierDesk({ token, socket, notify }: { token: string; socket: Socket 
     });
   }, []);
 
-  useEffect(() => {
-    if (!socket) return;
-    const sync = (order: Order) => {
-      setOrders((current) => {
-        const without = current.filter((row) => row.id !== order.id);
-        return billStatuses.includes(order.status) ? sortNewest([order, ...without]) : without;
-      });
-    };
-    socket.on("order:created", sync);
-    socket.on("order:status_changed", sync);
-    socket.on("payment:completed", sync);
-    return () => {
-      socket.off("order:created", sync);
-      socket.off("order:status_changed", sync);
-      socket.off("payment:completed", sync);
-    };
-  }, [socket]);
+  usePolling(() => {
+    load().catch(() => {});
+  }, POLL_INTERVAL, !!token);
 
   async function pay(order: Order) {
     setPayingId(order.id);
